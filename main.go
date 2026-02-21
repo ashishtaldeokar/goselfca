@@ -17,10 +17,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -48,12 +48,12 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 		}
 		return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 	} else if keyErr != nil {
-		return nil, fmt.Errorf("%s (but %s exists)", keyErr, certFile)
+		return nil, fmt.Errorf("%v (but %s exists)", keyErr, certFile)
 	} else if certErr != nil {
 		if reuseKey {
 			key, err := readPrivateKey(keyContents)
 			if err != nil {
-				return nil, fmt.Errorf("reading private key from %s: %s", keyFile, err)
+				return nil, fmt.Errorf("reading private key from %s: %w", keyFile, err)
 			}
 			_, err = makeRootCert(key, certFile, caValidity, org, unit)
 			if err != nil {
@@ -61,21 +61,21 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 			}
 			return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 		}
-		return nil, fmt.Errorf("%s (but %s exists)", certErr, keyFile)
+		return nil, fmt.Errorf("%v (but %s exists)", certErr, keyFile)
 	}
 	key, err := readPrivateKey(keyContents)
 	if err != nil {
-		return nil, fmt.Errorf("reading private key from %s: %s", keyFile, err)
+		return nil, fmt.Errorf("reading private key from %s: %w", keyFile, err)
 	}
 
 	cert, err := readCert(certContents)
 	if err != nil {
-		return nil, fmt.Errorf("reading CA certificate from %s: %s", certFile, err)
+		return nil, fmt.Errorf("reading CA certificate from %s: %w", certFile, err)
 	}
 
 	equal, err := publicKeysEqual(key.Public(), cert.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("comparing public keys: %s", err)
+		return nil, fmt.Errorf("comparing public keys: %w", err)
 	} else if !equal {
 		return nil, fmt.Errorf("public key in CA certificate %s doesn't match private key in %s",
 			certFile, keyFile)
@@ -171,8 +171,13 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
 	return key, nil
 }
 
+func generateSerialNumber() (*big.Int, error) {
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	return rand.Int(rand.Reader, serialNumberLimit)
+}
+
 func makeRootCert(key crypto.Signer, filename string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
-	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	serial, err := generateSerialNumber()
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +272,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 	return skid[:], nil
 }
 
-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
+func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
 	var cn string
 	if len(domains) > 0 {
 		cn = domains[0]
@@ -276,19 +281,21 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	} else {
 		return nil, fmt.Errorf("must specify at least one domain name or IP address")
 	}
-	var cnFolder = strings.Replace(cn, "*", "_", -1)
-	err := os.Mkdir(cnFolder, 0700)
-	if err != nil && !os.IsExist(err) {
+	if outDir == "" {
+		outDir = strings.Replace(cn, "*", "_", -1)
+	}
+	err := os.MkdirAll(outDir, 0700)
+	if err != nil {
 		return nil, err
 	}
-	var keyFile = fmt.Sprintf("%s/key.pem", cnFolder)
+	var keyFile = filepath.Join(outDir, "key.pem")
 	var key crypto.Signer
 	if reuseKey {
 		keyContents, keyErr := os.ReadFile(keyFile)
 		if keyErr == nil {
 			key, err = readPrivateKey(keyContents)
 			if err != nil {
-				return nil, fmt.Errorf("reading private key from %s: %s", keyFile, err)
+				return nil, fmt.Errorf("reading private key from %s: %w", keyFile, err)
 			}
 		}
 	}
@@ -302,7 +309,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	if err != nil {
 		return nil, err
 	}
-	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	serial, err := generateSerialNumber()
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +355,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(fmt.Sprintf("%s/cert.pem", cnFolder), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(filepath.Join(outDir, "cert.pem"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +482,6 @@ will not overwrite existing keys or certificates.
 	if err != nil {
 		return err
 	}
-	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit)
+	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit, "")
 	return err
 }

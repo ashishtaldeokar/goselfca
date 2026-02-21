@@ -126,12 +126,6 @@ func TestSignProfiles(t *testing.T) {
 	caKeyPath := filepath.Join(tempDir, "ca-key.pem")
 	caCertPath := filepath.Join(tempDir, "ca-cert.pem")
 
-	// Store original working directory to restore later
-	originalWD, _ := os.Getwd()
-	defer os.Chdir(originalWD)
-	// Change to temp dir because `sign` creates a directory based on the domain name
-	os.Chdir(tempDir)
-
 	err := makeIssuer(caKeyPath, caCertPath, x509.Ed25519, 24*time.Hour, "", "")
 	if err != nil {
 		t.Fatalf("Failed to setup issuer: %v", err)
@@ -172,7 +166,7 @@ func TestSignProfiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cert, err := sign(iss, []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity, "", "")
+			cert, err := sign(iss, []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity, "", "", filepath.Join(tempDir, tt.domain))
 			if err != nil {
 				t.Fatalf("sign() error = %v", err)
 			}
@@ -201,10 +195,6 @@ func TestSignOrgUnit(t *testing.T) {
 	caKeyPath := filepath.Join(tempDir, "ca-key.pem")
 	caCertPath := filepath.Join(tempDir, "ca-cert.pem")
 
-	originalWD, _ := os.Getwd()
-	defer os.Chdir(originalWD)
-	os.Chdir(tempDir)
-
 	org := "My Test Org"
 	unit := "My Test Unit"
 
@@ -218,7 +208,7 @@ func TestSignOrgUnit(t *testing.T) {
 		t.Fatalf("Failed to retrieve issuer: %v", err)
 	}
 
-	cert, err := sign(iss, []string{"test.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, org, unit)
+	cert, err := sign(iss, []string{"test.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, org, unit, filepath.Join(tempDir, "test.local"))
 	if err != nil {
 		t.Fatalf("sign() error = %v", err)
 	}

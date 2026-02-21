@@ -1,49 +1,112 @@
-Goselfca is a simple CA intended for use in situations where the CA operator
-also operates each host where a certificate will be used. It automatically
-generates both a key and a certificate when asked to produce a certificate.
-It does not offer OCSP or CRL services. Goselfca is appropriate, for instance,
-for generating certificates for RPC systems or microservices.
+# goselfca
 
-On first run, goselfca will generate a keypair and a root certificate in the
-current directory, and will reuse that same keypair and root certificate
-unless they are deleted.
+`goselfca` is a simple, zero-dependency Certificate Authority (CA) generator built in Go. It is designed for use cases where the CA operator also operates each host where a certificate will be used, such as internal microservices, RPC systems, local development environments, and IoT devices.
 
-On each run, goselfca will generate a new keypair and sign an end-entity (leaf)
-certificate for that keypair. The certificate will contain a list of DNS names
-and/or IP addresses from the command line flags. The key and certificate are
-placed in a new directory whose name is chosen as the first domain name from
-the certificate, or the first IP address if no domain names are present. It
-will not overwrite existing keys or certificates.
+Instead of writing complex OpenSSL bash scripts, `goselfca` automatically generates both a private key and a valid certificate in a single command. 
 
-The certificate will have a validity of 2 years and 30 days.
+## Features
 
-# Installation
+- **Modern Cryptography**: Supports `Ed25519` (default), `ECDSA` (P-384), and `RSA` (2048-bit) algorithms.
+- **Certificate Profiles**: Generate certificates tailored for your use case:
+  - `server` (default): TLS Web Server Authentication
+  - `client`: TLS Web Client Authentication
+  - `peer`: Both Server and Client Authentication (perfect for Mutual TLS / mTLS)
+- **Customizable Validity**: Configure the exact TTL of both the Root CA and the generated leaf certificates.
+- **Subject Customization**: Easily inject Subject `Organization` (O) and `Organizational Unit` (OU) fields for clean logs and network debugging.
+- **High Entropy**: Uses 128-bit randomly generated serial numbers to prevent collision attacks.
+- **Idempotent by Default**: Reuses existing Root CA keys and certificates if they exist in the directory. 
 
-First, install the [Go tools](https://golang.org/dl/) and set up your `$GOPATH`.
-Then, run:
+> **Note**: `goselfca` acts as a developer-friendly Root CA. It does not offer OCSP or CRL services.
 
-`go install github.com/ashishtaldeokar/goselfca@latest`
+## Installation
 
-When using Go 1.11 or newer you don't need a $GOPATH and can instead do the
-following:
+Ensure you have Go installed, then run:
 
-```
-cd /ANY/PATH
-git clone https://github.com/ashishtaldeokar/goselfca.git
-go build
-## or
-# go install
+```bash
+go install github.com/ashishtaldeokar/goselfca@latest
 ```
 
-Mac OS users could alternatively use Homebrew: `brew install goselfca`
+## Quick Start
 
-# Example usage
+Generate a new Root CA and a Server Certificate for `example.com`:
 
+```bash
+goselfca --domains "example.com"
 ```
-# Generate a root key and cert in goselfca-key.pem, and goselfca.pem, then
-# generate and sign an end-entity key and cert, storing them in ./foo.com/
-$ goselfca --domains foo.com
 
-# Wildcard
-$ goselfca --domains '*.foo.com'
+This will:
+1. Generate `goselfca-key.pem` and `goselfca.pem` (Your Root CA) in the current directory if they don't exist.
+2. Create a new directory named `example.com`.
+3. Generate `key.pem` and `cert.pem` inside `example.com/` signed by your Root CA.
+
+## Advanced Usage
+
+### 1. Generating a Client Certificate for mTLS
+If you are building an mTLS system (like a gRPC mesh), you can generate a certificate with the `client` profile:
+
+```bash
+goselfca --domains "service-a.local" --profile client
 ```
+
+Or a `peer` certificate for nodes that act as both clients and servers:
+
+```bash
+goselfca --domains "node-1.raft.local" --profile peer
+```
+
+### 2. Customizing Validity Periods
+The default validity for the Root CA is 100 years, and leaf certificates default to 2 years and 30 days (to satisfy macOS/iOS constraints). You can customize these using Go's duration strings (e.g., `h` for hours):
+
+```bash
+# Generate a short-lived certificate valid for only 24 hours
+goselfca --domains "ephemeral.internal" --validity 24h
+
+# Generate a Root CA valid for only 1 year (8760 hours)
+goselfca --domains "ephemeral.internal" --ca-validity 8760h
+```
+
+### 3. Adding Organization Metadata
+When managing multiple certificates, it helps to identify them by their Organization (`O`) or Organizational Unit (`OU`):
+
+```bash
+goselfca --domains "*.internal.company.com" \
+         --org "Company Inc." \
+         --unit "Backend Engineering"
+```
+
+### 4. Specifying IP Addresses
+You can generate certificates bound to an IP address instead of a DNS name. Or both!
+
+```bash
+goselfca --domains "localhost" --ip-addresses "127.0.0.1,10.0.0.5"
+```
+
+### 5. Using Legacy Algorithms (RSA, ECDSA)
+By default, `goselfca` uses `Ed25519`. If you are working with older systems that do not support Ed25519, you can switch the algorithm:
+
+```bash
+goselfca --domains "legacy.local" --ca-alg rsa
+```
+
+## Trusting the CA
+
+To make your browser or operating system trust the certificates generated by `goselfca`, you must add the Root CA (`goselfca.pem`) to your system's trust store.
+
+**macOS:**
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain goselfca.pem
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo cp goselfca.pem /usr/local/share/ca-certificates/goselfca.crt
+sudo update-ca-certificates
+```
+
+**Windows:**
+```powershell
+Import-Certificate -FilePath "goselfca.pem" -CertStoreLocation cert:\LocalMachine\Root
+```
+
+## License
+MIT License
