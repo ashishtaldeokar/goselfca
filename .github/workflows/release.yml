@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.3'
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          # This token is provided by GitHub Actions automatically.
+          # It allows GoReleaser to upload assets to the GitHub Release page.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+          # If you want to use the Homebrew Tap feature, uncomment this line and 
+          # create a Personal Access Token (PAT) with 'repo' scope in your GitHub settings,
+          # then add it as a repository secret named 'TAP_GITHUB_TOKEN'.
+          # TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

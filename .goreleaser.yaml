@@ -1,0 +1,87 @@
+version: 2
+
+# Build configuration
+builds:
+  - id: goselfca
+    main: ./cmd/goselfca
+    binary: goselfca
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+# Archive configuration (how releases are packaged)
+archives:
+  - format: tar.gz
+    # Use zip for Windows
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+# Generate checksums for security
+checksum:
+  name_template: "checksums.txt"
+
+# Generate Changelog
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "Merge pull request"
+
+# Generate Linux packages (.deb, .rpm, .apk)
+nfpms:
+  - id: goselfca
+    vendor: Ashish Taldeokar
+    homepage: https://github.com/ashishtaldeokar/goselfca
+    maintainer: Ashish Taldeokar <ashishtaldeokar@gmail.com>
+    description: A zero-dependency Certificate Authority (CA) generator built in Go.
+    license: MIT
+    formats:
+      - apk
+      - deb
+      - rpm
+    bindir: /usr/local/bin
+
+# Release configuration (GitHub Releases)
+release:
+  github:
+    owner: ashishtaldeokar
+    name: goselfca
+  prerelease: auto
+
+# Homebrew formula generation
+# NOTE: To use this, you must explicitly create a repository named 'homebrew-tap' 
+# inside your GitHub account BEFORE running goreleaser.
+brews:
+  - name: goselfca
+    repository:
+      owner: ashishtaldeokar
+      name: homebrew-tap
+      # A Personal Access Token (PAT) with 'repo' scope is required to push to another repo
+      # Install goreleaser locally and configure GITHUB_TOKEN environment variable. 
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    commit_author:
+      name: Goreleaser Bot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    directory: Formula
+    homepage: "https://github.com/ashishtaldeokar/goselfca"
+    description: "Zero-dependency Certificate Authority (CA) generator built in Go."
+    license: "MIT"
+    test: |
+      system "#{bin}/goselfca --help"
