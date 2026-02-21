@@ -38,15 +38,15 @@ type issuer struct {
 	cert *x509.Certificate
 }
 
-func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool) (*issuer, error) {
+func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool, caValidity time.Duration) (*issuer, error) {
 	keyContents, keyErr := os.ReadFile(keyFile)
 	certContents, certErr := os.ReadFile(certFile)
 	if os.IsNotExist(keyErr) && os.IsNotExist(certErr) {
-		err := makeIssuer(keyFile, certFile, alg)
+		err := makeIssuer(keyFile, certFile, alg, caValidity)
 		if err != nil {
 			return nil, err
 		}
-		return getIssuer(keyFile, certFile, alg, false)
+		return getIssuer(keyFile, certFile, alg, false, caValidity)
 	} else if keyErr != nil {
 		return nil, fmt.Errorf("%s (but %s exists)", keyErr, certFile)
 	} else if certErr != nil {
@@ -55,11 +55,11 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 			if err != nil {
 				return nil, fmt.Errorf("reading private key from %s: %s", keyFile, err)
 			}
-			_, err = makeRootCert(key, certFile)
+			_, err = makeRootCert(key, certFile, caValidity)
 			if err != nil {
 				return nil, err
 			}
-			return getIssuer(keyFile, certFile, alg, false)
+			return getIssuer(keyFile, certFile, alg, false, caValidity)
 		}
 		return nil, fmt.Errorf("%s (but %s exists)", certErr, keyFile)
 	}
@@ -120,12 +120,12 @@ func readCert(certContents []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-func makeIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm) error {
+func makeIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, caValidity time.Duration) error {
 	key, err := makeKey(keyFile, alg)
 	if err != nil {
 		return err
 	}
-	_, err = makeRootCert(key, certFile)
+	_, err = makeRootCert(key, certFile, caValidity)
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
 	return key, nil
 }
 
-func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error) {
+func makeRootCert(key crypto.Signer, filename string, validity time.Duration) (*x509.Certificate, error) {
 	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
 		},
 		SerialNumber: serial,
 		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(100, 0, 0),
+		NotAfter:     time.Now().Add(validity),
 
 		SubjectKeyId:          skid,
 		AuthorityKeyId:        skid,
@@ -258,7 +258,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 	return skid[:], nil
 }
 
-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string) (*x509.Certificate, error) {
+func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration) (*x509.Certificate, error) {
 	var cn string
 	if len(domains) > 0 {
 		cn = domains[0]
@@ -320,11 +320,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 		},
 		SerialNumber: serial,
 		NotBefore:    time.Now(),
-		// Set the validity period to 2 years and 30 days, to satisfy the iOS and
-		// macOS requirements that all server certificates must have validity
-		// shorter than 825 days:
-		// https://derflounder.wordpress.com/2019/06/06/new-tls-security-requirements-for-ios-13-and-macos-catalina-10-15/
-		NotAfter: time.Now().AddDate(2, 0, 30),
+		NotAfter:     time.Now().Add(validity),
 
 		KeyUsage:              keyUsage,
 		ExtKeyUsage:           extKeyUsage,
@@ -365,6 +361,8 @@ func main2() error {
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
+	var validityStr = flag.String("validity", "", "Validity period for the generated certificate (e.g., 8760h for 1 year). Defaults to 2 years and 30 days.")
+	var caValidityStr = flag.String("ca-validity", "", "Validity period for the root CA certificate. Defaults to 100 years.")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, `
@@ -425,10 +423,39 @@ will not overwrite existing keys or certificates.
 			os.Exit(1)
 		}
 	}
-	issuer, err := getIssuer(*caKey, *caCert, alg, *reuseKeys)
+	// Parse validity and caValidity durations
+	var validity time.Duration
+	if *validityStr != "" {
+		var err error
+		validity, err = time.ParseDuration(*validityStr)
+		if err != nil {
+			fmt.Printf("Invalid validity duration %q: %v\n", *validityStr, err)
+			os.Exit(1)
+		}
+	} else {
+		// Default: 2 years and 30 days
+		// 365 days * 2 + 30 days = 760 days = 18240 hours
+		validity = 18240 * time.Hour
+	}
+
+	var caValidity time.Duration
+	if *caValidityStr != "" {
+		var err error
+		caValidity, err = time.ParseDuration(*caValidityStr)
+		if err != nil {
+			fmt.Printf("Invalid CA validity duration %q: %v\n", *caValidityStr, err)
+			os.Exit(1)
+		}
+	} else {
+		// Default: 100 years
+		// 365 days * 100 = 36500 days = 876000 hours
+		caValidity = 876000 * time.Hour
+	}
+
+	issuer, err := getIssuer(*caKey, *caCert, alg, *reuseKeys, caValidity)
 	if err != nil {
 		return err
 	}
-	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile)
+	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity)
 	return err
 }
