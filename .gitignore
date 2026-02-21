@@ -35,6 +35,4 @@ go.work.sum
 **/*.pem
 
 # executable
-goselfca
 bin/
-
