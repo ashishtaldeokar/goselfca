@@ -1,4 +1,21 @@
-package main
+// goselfca is a simple CA intended for use in situations where the CA operator
+// also operates each host where a certificate will be used. It automatically
+// generates both a key and a certificate when asked to produce a certificate.
+// It does not offer OCSP or CRL services. goselfca is appropriate, for instance,
+// for generating certificates for RPC systems or microservices.
+//
+// On first run, goselfca will generate a keypair and a root certificate in the
+// current directory, and will reuse that same keypair and root certificate
+// unless they are deleted.
+//
+// On each run, goselfca will generate a new keypair and sign an end-entity (leaf)
+// certificate for that keypair. The certificate will contain a list of DNS names
+// and/or IP addresses from the command line flags. The key and certificate are
+// placed in a new directory whose name is chosen as the first domain name from
+// the certificate, or the first IP address if no domain names are present. It
+//
+// The command-line tool wraps this package.
+package goselfca
 
 import (
 	"bytes"
@@ -14,31 +31,23 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
-	"flag"
 	"fmt"
-	"log"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
 
-func main() {
-	err := main2()
-	if err != nil {
-		log.Fatal(err)
-	}
+// Issuer represents the CA's private key and certificate required to sign new leaf certificates.
+type Issuer struct {
+	Key  crypto.Signer
+	Cert *x509.Certificate
 }
 
-type issuer struct {
-	key  crypto.Signer
-	cert *x509.Certificate
-}
-
-func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool, caValidity time.Duration, org, unit string) (*issuer, error) {
+// GetIssuer reads an existing keypair for a CA, or generates a new one if it doesn't exist.
+func GetIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool, caValidity time.Duration, org, unit string) (*Issuer, error) {
 	keyContents, keyErr := os.ReadFile(keyFile)
 	certContents, certErr := os.ReadFile(certFile)
 	if os.IsNotExist(keyErr) && os.IsNotExist(certErr) {
@@ -46,7 +55,7 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 		if err != nil {
 			return nil, err
 		}
-		return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
+		return GetIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 	} else if keyErr != nil {
 		return nil, fmt.Errorf("%v (but %s exists)", keyErr, certFile)
 	} else if certErr != nil {
@@ -55,11 +64,11 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 			if err != nil {
 				return nil, fmt.Errorf("reading private key from %s: %w", keyFile, err)
 			}
-			_, err = makeRootCert(key, certFile, caValidity, org, unit)
+			_, err = MakeRootCert(key, certFile, caValidity, org, unit)
 			if err != nil {
 				return nil, err
 			}
-			return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
+			return GetIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 		}
 		return nil, fmt.Errorf("%v (but %s exists)", certErr, keyFile)
 	}
@@ -80,7 +89,7 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 		return nil, fmt.Errorf("public key in CA certificate %s doesn't match private key in %s",
 			certFile, keyFile)
 	}
-	return &issuer{key, cert}, nil
+	return &Issuer{key, cert}, nil
 }
 
 func readPrivateKey(keyContents []byte) (crypto.Signer, error) {
@@ -121,18 +130,19 @@ func readCert(certContents []byte) (*x509.Certificate, error) {
 }
 
 func makeIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, caValidity time.Duration, org, unit string) error {
-	key, err := makeKey(keyFile, alg)
+	key, err := MakeKey(keyFile, alg)
 	if err != nil {
 		return err
 	}
-	_, err = makeRootCert(key, certFile, caValidity, org, unit)
+	_, err = MakeRootCert(key, certFile, caValidity, org, unit)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+// MakeKey generates a new cryptographic keypair using the specified algorithm and saves it to a file.
+func MakeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	var key crypto.Signer
 	var err error
 	switch {
@@ -176,7 +186,8 @@ func generateSerialNumber() (*big.Int, error) {
 	return rand.Int(rand.Reader, serialNumberLimit)
 }
 
-func makeRootCert(key crypto.Signer, filename string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
+// MakeRootCert creates a new, self-signed Root CA certificate using the provided private key.
+func MakeRootCert(key crypto.Signer, filename string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
 	serial, err := generateSerialNumber()
 	if err != nil {
 		return nil, err
@@ -272,7 +283,8 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 	return skid[:], nil
 }
 
-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
+// Sign generates an end-entity (leaf) certificate signed by the Root CA's private key.
+func Sign(iss *Issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
 	var cn string
 	if len(domains) > 0 {
 		cn = domains[0]
@@ -300,7 +312,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 		}
 	}
 	if key == nil {
-		key, err = makeKey(keyFile, alg)
+		key, err = MakeKey(keyFile, alg)
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +363,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, iss.cert, key.Public(), iss.key)
+	der, err := x509.CreateCertificate(rand.Reader, template, iss.Cert, key.Public(), iss.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -370,118 +382,4 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	return x509.ParseCertificate(der)
 }
 
-func split(s string) (results []string) {
-	if len(s) > 0 {
-		return strings.Split(s, ",")
-	}
-	return nil
-}
-
-func main2() error {
-	var caKey = flag.String("ca-key", "goselfca-key.pem", "Root private key filename, PEM encoded.")
-	var caCert = flag.String("ca-cert", "goselfca.pem", "Root certificate filename, PEM encoded.")
-	var caAlg = flag.String("ca-alg", "ed25519", "Algorithm for any new keypairs: RSA, ECDSA, or Ed25519.")
-	var profile = flag.String("profile", "server", "Certificate profile: server, client, or peer.")
-	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
-	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
-	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
-	var org = flag.String("org", "", "Organization (O) to include in the certificate subject.")
-	var unit = flag.String("unit", "", "Organizational Unit (OU) to include in the certificate subject.")
-	var validityStr = flag.String("validity", "", "Validity period for the generated certificate (e.g., 8760h for 1 year). Defaults to 2 years and 30 days.")
-	var caValidityStr = flag.String("ca-validity", "", "Validity period for the root CA certificate. Defaults to 100 years.")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `
-goselfca is a simple CA intended for use in situations where the CA operator
-also operates each host where a certificate will be used. It automatically
-generates both a key and a certificate when asked to produce a certificate.
-It does not offer OCSP or CRL services. goselfca is appropriate, for instance,
-for generating certificates for RPC systems or microservices.
-
-On first run, goselfca will generate a keypair and a root certificate in the
-current directory, and will reuse that same keypair and root certificate
-unless they are deleted.
-
-On each run, goselfca will generate a new keypair and sign an end-entity (leaf)
-certificate for that keypair. The certificate will contain a list of DNS names
-and/or IP addresses from the command line flags. The key and certificate are
-placed in a new directory whose name is chosen as the first domain name from
-the certificate, or the first IP address if no domain names are present. It
-will not overwrite existing keys or certificates.
-
-`)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-	if *domains == "" && *ipAddresses == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-	if *profile != "server" && *profile != "client" && *profile != "peer" {
-		fmt.Printf("Unrecognized profile: %s (use server, client, or peer)\n", *profile)
-		os.Exit(1)
-	}
-	alg := x509.RSA
-	if strings.ToLower(*caAlg) == "ecdsa" {
-		alg = x509.ECDSA
-	} else if strings.ToLower(*caAlg) == "ed25519" {
-		alg = x509.Ed25519
-	} else if strings.ToLower(*caAlg) != "rsa" {
-		fmt.Printf("Unrecognized algorithm: %s (use RSA, ECDSA, or Ed25519)\n", *caAlg)
-		os.Exit(1)
-	}
-	if len(flag.Args()) > 0 {
-		fmt.Printf("Extra arguments: %s (maybe there are spaces in your domain list?)\n", flag.Args())
-		os.Exit(1)
-	}
-	domainSlice := split(*domains)
-	domainRe := regexp.MustCompile("^[A-Za-z0-9.*-]+$")
-	for _, d := range domainSlice {
-		if !domainRe.MatchString(d) {
-			fmt.Printf("Invalid domain name %q\n", d)
-			os.Exit(1)
-		}
-	}
-	ipSlice := split(*ipAddresses)
-	for _, ip := range ipSlice {
-		if net.ParseIP(ip) == nil {
-			fmt.Printf("Invalid IP address %q\n", ip)
-			os.Exit(1)
-		}
-	}
-	// Parse validity and caValidity durations
-	var validity time.Duration
-	if *validityStr != "" {
-		var err error
-		validity, err = time.ParseDuration(*validityStr)
-		if err != nil {
-			fmt.Printf("Invalid validity duration %q: %v\n", *validityStr, err)
-			os.Exit(1)
-		}
-	} else {
-		// Default: 2 years and 30 days
-		// 365 days * 2 + 30 days = 760 days = 18240 hours
-		validity = 18240 * time.Hour
-	}
-
-	var caValidity time.Duration
-	if *caValidityStr != "" {
-		var err error
-		caValidity, err = time.ParseDuration(*caValidityStr)
-		if err != nil {
-			fmt.Printf("Invalid CA validity duration %q: %v\n", *caValidityStr, err)
-			os.Exit(1)
-		}
-	} else {
-		// Default: 100 years
-		// 365 days * 100 = 36500 days = 876000 hours
-		caValidity = 876000 * time.Hour
-	}
-
-	issuer, err := getIssuer(*caKey, *caCert, alg, *reuseKeys, caValidity, *org, *unit)
-	if err != nil {
-		return err
-	}
-	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit, "")
-	return err
-}
+// end of goselfca.go
