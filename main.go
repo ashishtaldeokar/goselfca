@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -15,7 +16,6 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math"
 	"math/big"
@@ -97,6 +97,8 @@ func readPrivateKey(keyContents []byte) (crypto.Signer, error) {
 			return signer.(*rsa.PrivateKey), nil
 		case *ecdsa.PrivateKey:
 			return signer.(*ecdsa.PrivateKey), nil
+		case ed25519.PrivateKey:
+			return signer.(ed25519.PrivateKey), nil
 		default:
 			return nil, fmt.Errorf("unsupported PKCS8 key type: %t", t)
 		}
@@ -141,6 +143,11 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
 		}
 	case alg == x509.ECDSA:
 		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+	case alg == x509.Ed25519:
+		_, key, err = ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, err
 		}
@@ -268,7 +275,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	var keyFile = fmt.Sprintf("%s/key.pem", cnFolder)
 	var key crypto.Signer
 	if reuseKey {
-		keyContents, keyErr := ioutil.ReadFile(keyFile)
+		keyContents, keyErr := os.ReadFile(keyFile)
 		if keyErr == nil {
 			key, err = readPrivateKey(keyContents)
 			if err != nil {
@@ -290,6 +297,10 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	if err != nil {
 		return nil, err
 	}
+	keyUsage := x509.KeyUsageDigitalSignature
+	if alg == x509.RSA {
+		keyUsage |= x509.KeyUsageKeyEncipherment
+	}
 	template := &x509.Certificate{
 		DNSNames:    domains,
 		IPAddresses: parsedIPs,
@@ -304,7 +315,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 		// https://derflounder.wordpress.com/2019/06/06/new-tls-security-requirements-for-ios-13-and-macos-catalina-10-15/
 		NotAfter: time.Now().AddDate(2, 0, 30),
 
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:              keyUsage,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
@@ -338,7 +349,7 @@ func split(s string) (results []string) {
 func main2() error {
 	var caKey = flag.String("ca-key", "goselfca-key.pem", "Root private key filename, PEM encoded.")
 	var caCert = flag.String("ca-cert", "goselfca.pem", "Root certificate filename, PEM encoded.")
-	var caAlg = flag.String("ca-alg", "ecdsa", "Algorithm for any new keypairs: RSA or ECDSA.")
+	var caAlg = flag.String("ca-alg", "ed25519", "Algorithm for any new keypairs: RSA, ECDSA, or Ed25519.")
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
@@ -373,8 +384,10 @@ will not overwrite existing keys or certificates.
 	alg := x509.RSA
 	if strings.ToLower(*caAlg) == "ecdsa" {
 		alg = x509.ECDSA
+	} else if strings.ToLower(*caAlg) == "ed25519" {
+		alg = x509.Ed25519
 	} else if strings.ToLower(*caAlg) != "rsa" {
-		fmt.Printf("Unrecognized algorithm: %s (use RSA or ECDSA)\n", *caAlg)
+		fmt.Printf("Unrecognized algorithm: %s (use RSA, ECDSA, or Ed25519)\n", *caAlg)
 		os.Exit(1)
 	}
 	if len(flag.Args()) > 0 {
