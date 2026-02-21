@@ -258,7 +258,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 	return skid[:], nil
 }
 
-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool) (*x509.Certificate, error) {
+func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string) (*x509.Certificate, error) {
 	var cn string
 	if len(domains) > 0 {
 		cn = domains[0]
@@ -301,6 +301,17 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	if alg == x509.RSA {
 		keyUsage |= x509.KeyUsageKeyEncipherment
 	}
+	var extKeyUsage []x509.ExtKeyUsage
+	switch profile {
+	case "server":
+		extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	case "client":
+		extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	case "peer":
+		extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	default:
+		return nil, fmt.Errorf("unrecognized profile: %s", profile)
+	}
 	template := &x509.Certificate{
 		DNSNames:    domains,
 		IPAddresses: parsedIPs,
@@ -316,7 +327,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 		NotAfter: time.Now().AddDate(2, 0, 30),
 
 		KeyUsage:              keyUsage,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           extKeyUsage,
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 	}
@@ -350,6 +361,7 @@ func main2() error {
 	var caKey = flag.String("ca-key", "goselfca-key.pem", "Root private key filename, PEM encoded.")
 	var caCert = flag.String("ca-cert", "goselfca.pem", "Root certificate filename, PEM encoded.")
 	var caAlg = flag.String("ca-alg", "ed25519", "Algorithm for any new keypairs: RSA, ECDSA, or Ed25519.")
+	var profile = flag.String("profile", "server", "Certificate profile: server, client, or peer.")
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
@@ -379,6 +391,10 @@ will not overwrite existing keys or certificates.
 	flag.Parse()
 	if *domains == "" && *ipAddresses == "" {
 		flag.Usage()
+		os.Exit(1)
+	}
+	if *profile != "server" && *profile != "client" && *profile != "peer" {
+		fmt.Printf("Unrecognized profile: %s (use server, client, or peer)\n", *profile)
 		os.Exit(1)
 	}
 	alg := x509.RSA
@@ -413,6 +429,6 @@ will not overwrite existing keys or certificates.
 	if err != nil {
 		return err
 	}
-	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys)
+	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile)
 	return err
 }
