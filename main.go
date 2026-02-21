@@ -38,15 +38,15 @@ type issuer struct {
 	cert *x509.Certificate
 }
 
-func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool, caValidity time.Duration) (*issuer, error) {
+func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey bool, caValidity time.Duration, org, unit string) (*issuer, error) {
 	keyContents, keyErr := os.ReadFile(keyFile)
 	certContents, certErr := os.ReadFile(certFile)
 	if os.IsNotExist(keyErr) && os.IsNotExist(certErr) {
-		err := makeIssuer(keyFile, certFile, alg, caValidity)
+		err := makeIssuer(keyFile, certFile, alg, caValidity, org, unit)
 		if err != nil {
 			return nil, err
 		}
-		return getIssuer(keyFile, certFile, alg, false, caValidity)
+		return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 	} else if keyErr != nil {
 		return nil, fmt.Errorf("%s (but %s exists)", keyErr, certFile)
 	} else if certErr != nil {
@@ -55,11 +55,11 @@ func getIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, reuseKey b
 			if err != nil {
 				return nil, fmt.Errorf("reading private key from %s: %s", keyFile, err)
 			}
-			_, err = makeRootCert(key, certFile, caValidity)
+			_, err = makeRootCert(key, certFile, caValidity, org, unit)
 			if err != nil {
 				return nil, err
 			}
-			return getIssuer(keyFile, certFile, alg, false, caValidity)
+			return getIssuer(keyFile, certFile, alg, false, caValidity, org, unit)
 		}
 		return nil, fmt.Errorf("%s (but %s exists)", certErr, keyFile)
 	}
@@ -120,12 +120,12 @@ func readCert(certContents []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-func makeIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, caValidity time.Duration) error {
+func makeIssuer(keyFile, certFile string, alg x509.PublicKeyAlgorithm, caValidity time.Duration, org, unit string) error {
 	key, err := makeKey(keyFile, alg)
 	if err != nil {
 		return err
 	}
-	_, err = makeRootCert(key, certFile, caValidity)
+	_, err = makeRootCert(key, certFile, caValidity, org, unit)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
 	return key, nil
 }
 
-func makeRootCert(key crypto.Signer, filename string, validity time.Duration) (*x509.Certificate, error) {
+func makeRootCert(key crypto.Signer, filename string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
 	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, err
@@ -180,10 +180,19 @@ func makeRootCert(key crypto.Signer, filename string, validity time.Duration) (*
 	if err != nil {
 		return nil, err
 	}
+
+	subjectName := pkix.Name{
+		CommonName: "GoSelfCA Root CA " + hex.EncodeToString(serial.Bytes()[:3]),
+	}
+	if org != "" {
+		subjectName.Organization = []string{org}
+	}
+	if unit != "" {
+		subjectName.OrganizationalUnit = []string{unit}
+	}
+
 	template := &x509.Certificate{
-		Subject: pkix.Name{
-			CommonName: "goselfca root ca " + hex.EncodeToString(serial.Bytes()[:3]),
-		},
+		Subject:      subjectName,
 		SerialNumber: serial,
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(validity),
@@ -201,7 +210,7 @@ func makeRootCert(key crypto.Signer, filename string, validity time.Duration) (*
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +267,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 	return skid[:], nil
 }
 
-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration) (*x509.Certificate, error) {
+func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string) (*x509.Certificate, error) {
 	var cn string
 	if len(domains) > 0 {
 		cn = domains[0]
@@ -312,12 +321,20 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	default:
 		return nil, fmt.Errorf("unrecognized profile: %s", profile)
 	}
+	subjectName := pkix.Name{
+		CommonName: cn,
+	}
+	if org != "" {
+		subjectName.Organization = []string{org}
+	}
+	if unit != "" {
+		subjectName.OrganizationalUnit = []string{unit}
+	}
+
 	template := &x509.Certificate{
-		DNSNames:    domains,
-		IPAddresses: parsedIPs,
-		Subject: pkix.Name{
-			CommonName: cn,
-		},
+		DNSNames:     domains,
+		IPAddresses:  parsedIPs,
+		Subject:      subjectName,
 		SerialNumber: serial,
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(validity),
@@ -331,7 +348,7 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(fmt.Sprintf("%s/cert.pem", cnFolder), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(fmt.Sprintf("%s/cert.pem", cnFolder), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -361,6 +378,8 @@ func main2() error {
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
+	var org = flag.String("org", "", "Organization (O) to include in the certificate subject.")
+	var unit = flag.String("unit", "", "Organizational Unit (OU) to include in the certificate subject.")
 	var validityStr = flag.String("validity", "", "Validity period for the generated certificate (e.g., 8760h for 1 year). Defaults to 2 years and 30 days.")
 	var caValidityStr = flag.String("ca-validity", "", "Validity period for the root CA certificate. Defaults to 100 years.")
 	flag.Usage = func() {
@@ -452,10 +471,10 @@ will not overwrite existing keys or certificates.
 		caValidity = 876000 * time.Hour
 	}
 
-	issuer, err := getIssuer(*caKey, *caCert, alg, *reuseKeys, caValidity)
+	issuer, err := getIssuer(*caKey, *caCert, alg, *reuseKeys, caValidity, *org, *unit)
 	if err != nil {
 		return err
 	}
-	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity)
+	_, err = sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit)
 	return err
 }

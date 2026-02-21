@@ -104,7 +104,7 @@ func TestMakeRootCert(t *testing.T) {
 	}
 
 	validity := 24 * time.Hour
-	cert, err := makeRootCert(key, certPath, validity)
+	cert, err := makeRootCert(key, certPath, validity, "", "")
 	if err != nil {
 		t.Fatalf("makeRootCert() error = %v", err)
 	}
@@ -132,12 +132,12 @@ func TestSignProfiles(t *testing.T) {
 	// Change to temp dir because `sign` creates a directory based on the domain name
 	os.Chdir(tempDir)
 
-	err := makeIssuer(caKeyPath, caCertPath, x509.Ed25519, 24*time.Hour)
+	err := makeIssuer(caKeyPath, caCertPath, x509.Ed25519, 24*time.Hour, "", "")
 	if err != nil {
 		t.Fatalf("Failed to setup issuer: %v", err)
 	}
 
-	iss, err := getIssuer(caKeyPath, caCertPath, x509.Ed25519, false, 24*time.Hour)
+	iss, err := getIssuer(caKeyPath, caCertPath, x509.Ed25519, false, 24*time.Hour, "", "")
 	if err != nil {
 		t.Fatalf("Failed to retrieve issuer: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSignProfiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cert, err := sign(iss, []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity)
+			cert, err := sign(iss, []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity, "", "")
 			if err != nil {
 				t.Fatalf("sign() error = %v", err)
 			}
@@ -193,5 +193,49 @@ func TestSignProfiles(t *testing.T) {
 				t.Errorf("Expected Subject.CommonName = %v, got %v", tt.domain, cert.Subject.CommonName)
 			}
 		})
+	}
+}
+
+func TestSignOrgUnit(t *testing.T) {
+	tempDir := t.TempDir()
+	caKeyPath := filepath.Join(tempDir, "ca-key.pem")
+	caCertPath := filepath.Join(tempDir, "ca-cert.pem")
+
+	originalWD, _ := os.Getwd()
+	defer os.Chdir(originalWD)
+	os.Chdir(tempDir)
+
+	org := "My Test Org"
+	unit := "My Test Unit"
+
+	err := makeIssuer(caKeyPath, caCertPath, x509.Ed25519, 24*time.Hour, org, unit)
+	if err != nil {
+		t.Fatalf("Failed to setup issuer: %v", err)
+	}
+
+	iss, err := getIssuer(caKeyPath, caCertPath, x509.Ed25519, false, 24*time.Hour, org, unit)
+	if err != nil {
+		t.Fatalf("Failed to retrieve issuer: %v", err)
+	}
+
+	cert, err := sign(iss, []string{"test.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, org, unit)
+	if err != nil {
+		t.Fatalf("sign() error = %v", err)
+	}
+
+	// Verify Leaf Certificate Subject
+	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != org {
+		t.Errorf("Leaf Subject Organization = %v, want %v", cert.Subject.Organization, []string{org})
+	}
+	if len(cert.Subject.OrganizationalUnit) != 1 || cert.Subject.OrganizationalUnit[0] != unit {
+		t.Errorf("Leaf Subject OrganizationalUnit = %v, want %v", cert.Subject.OrganizationalUnit, []string{unit})
+	}
+
+	// Verify Root CA Certificate Subject (since it was passed to makeIssuer)
+	if len(iss.cert.Subject.Organization) != 1 || iss.cert.Subject.Organization[0] != org {
+		t.Errorf("Root Subject Organization = %v, want %v", iss.cert.Subject.Organization, []string{org})
+	}
+	if len(iss.cert.Subject.OrganizationalUnit) != 1 || iss.cert.Subject.OrganizationalUnit[0] != unit {
+		t.Errorf("Root Subject OrganizationalUnit = %v, want %v", iss.cert.Subject.OrganizationalUnit, []string{unit})
 	}
 }
