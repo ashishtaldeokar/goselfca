@@ -382,4 +382,86 @@ func Sign(iss *Issuer, domains []string, ipAddresses []string, alg x509.PublicKe
 	return x509.ParseCertificate(der)
 }
 
+// SignIntermediate generates an intermediate CA certificate signed by the Root CA's private key.
+// It sets IsCA to true and enforces MaxPathLenZero so it can only sign leaf certificates.
+func SignIntermediate(iss *Issuer, commonName string, alg x509.PublicKeyAlgorithm, reuseKey bool, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
+	if commonName == "" {
+		return nil, fmt.Errorf("must specify a common name for the intermediate CA")
+	}
+	if outDir == "" {
+		outDir = strings.Replace(commonName, " ", "_", -1)
+		outDir = strings.Replace(outDir, "*", "_", -1)
+	}
+	err := os.MkdirAll(outDir, 0700)
+	if err != nil {
+		return nil, err
+	}
+	var keyFile = filepath.Join(outDir, "key.pem")
+	var key crypto.Signer
+	if reuseKey {
+		keyContents, keyErr := os.ReadFile(keyFile)
+		if keyErr == nil {
+			key, err = readPrivateKey(keyContents)
+			if err != nil {
+				return nil, fmt.Errorf("reading private key from %s: %w", keyFile, err)
+			}
+		}
+	}
+	if key == nil {
+		key, err = MakeKey(keyFile, alg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	serial, err := generateSerialNumber()
+	if err != nil {
+		return nil, err
+	}
+	skid, err := calculateSKID(key.Public())
+	if err != nil {
+		return nil, err
+	}
+
+	subjectName := pkix.Name{
+		CommonName: commonName,
+	}
+	if org != "" {
+		subjectName.Organization = []string{org}
+	}
+	if unit != "" {
+		subjectName.OrganizationalUnit = []string{unit}
+	}
+
+	template := &x509.Certificate{
+		Subject:      subjectName,
+		SerialNumber: serial,
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(validity),
+
+		SubjectKeyId:          skid,
+		AuthorityKeyId:        iss.Cert.SubjectKeyId,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, iss.Cert, key.Public(), iss.Key)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(outDir, "cert.pem"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	err = pem.Encode(file, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
+}
+
 // end of goselfca.go

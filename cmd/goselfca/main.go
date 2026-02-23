@@ -33,6 +33,7 @@ func executeCLI() error {
 	var caCert = flag.String("ca-cert", "goselfca.pem", "Root certificate filename, PEM encoded.")
 	var caAlg = flag.String("ca-alg", "ed25519", "Algorithm for any new keypairs: RSA, ECDSA, or Ed25519.")
 	var profile = flag.String("profile", "server", "Certificate profile: server, client, or peer.")
+	var intermediate = flag.Bool("intermediate", false, "Generate an intermediate CA certificate instead of a leaf certificate.")
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
@@ -61,6 +62,7 @@ placed in a new directory whose name is chosen as the first domain name from
 the certificate, or the first IP address if no domain names are present. It
 will not overwrite existing keys or certificates.
 
+Use the --intermediate flag to generate a Sub-CA certificate instead of a leaf.
 `)
 		flag.PrintDefaults()
 	}
@@ -142,6 +144,22 @@ will not overwrite existing keys or certificates.
 	if err != nil {
 		return err
 	}
+
+	if *intermediate {
+		var cn string
+		if len(domainSlice) > 0 {
+			cn = domainSlice[0]
+		} else if len(ipSlice) > 0 {
+			cn = ipSlice[0]
+		} else if *org != "" {
+			cn = *org
+		} else {
+			return fmt.Errorf("must specify a domain name or organization for the intermediate CA common name")
+		}
+		_, err = goselfca.SignIntermediate(issuer, cn, alg, *reuseKeys, validity, *org, *unit, "")
+		return err
+	}
+
 	_, err = goselfca.Sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit, "")
 	return err
 }

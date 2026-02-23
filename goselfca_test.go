@@ -229,3 +229,63 @@ func TestSignOrgUnit(t *testing.T) {
 		t.Errorf("Root Subject OrganizationalUnit = %v, want %v", iss.Cert.Subject.OrganizationalUnit, []string{unit})
 	}
 }
+
+func TestSignIntermediate(t *testing.T) {
+	tempDir := t.TempDir()
+	caKeyPath := filepath.Join(tempDir, "ca-key.pem")
+	caCertPath := filepath.Join(tempDir, "ca-cert.pem")
+
+	// 1. Create Root CA
+	err := makeIssuer(caKeyPath, caCertPath, x509.Ed25519, 24*time.Hour, "Root Org", "Root Unit")
+	if err != nil {
+		t.Fatalf("Failed to setup root issuer: %v", err)
+	}
+
+	rootIss, err := GetIssuer(caKeyPath, caCertPath, x509.Ed25519, false, 24*time.Hour, "Root Org", "Root Unit")
+	if err != nil {
+		t.Fatalf("Failed to retrieve root issuer: %v", err)
+	}
+
+	// 2. Mint Intermediate CA
+	subCaDir := filepath.Join(tempDir, "subca")
+	subCaCert, err := SignIntermediate(rootIss, "My Intermediate CA", x509.Ed25519, false, 12*time.Hour, "Sub Org", "Sub Unit", subCaDir)
+	if err != nil {
+		t.Fatalf("SignIntermediate() error = %v", err)
+	}
+
+	// Validate Intermediate CA cert
+	if !subCaCert.IsCA {
+		t.Errorf("Intermediate cert is not a CA (IsCA is false)")
+	}
+	if !subCaCert.BasicConstraintsValid {
+		t.Errorf("Intermediate cert BasicConstraintsValid is false")
+	}
+	if subCaCert.MaxPathLenZero != true {
+		t.Errorf("Intermediate cert MaxPathLenZero should be true to prevent further sub-CAs")
+	}
+	if subCaCert.Subject.CommonName != "My Intermediate CA" {
+		t.Errorf("Intermediate cert CommonName = %v, want 'My Intermediate CA'", subCaCert.Subject.CommonName)
+	}
+
+	// 3. Mint a leaf cert from the Intermediate CA
+	subCaKeyPath := filepath.Join(subCaDir, "key.pem")
+	subCaCertPath := filepath.Join(subCaDir, "cert.pem")
+
+	subIss, err := GetIssuer(subCaKeyPath, subCaCertPath, x509.Ed25519, true, 12*time.Hour, "Sub Org", "Sub Unit")
+	if err != nil {
+		t.Fatalf("Failed to retrieve intermediate issuer: %v", err)
+	}
+
+	leafDir := filepath.Join(tempDir, "leaf")
+	leafCert, err := Sign(subIss, []string{"leaf.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, "Leaf Org", "Leaf Unit", leafDir)
+	if err != nil {
+		t.Fatalf("Sign() from intermediate error = %v", err)
+	}
+
+	if leafCert.IsCA {
+		t.Errorf("Leaf cert from intermediate incorrectly has IsCA = true")
+	}
+	if leafCert.Subject.CommonName != "leaf.local" {
+		t.Errorf("Leaf cert CommonName = %v, want 'leaf.local'", leafCert.Subject.CommonName)
+	}
+}
