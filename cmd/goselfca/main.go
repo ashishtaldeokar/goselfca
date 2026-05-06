@@ -35,6 +35,9 @@ func executeCLI() error {
 	var profile = flag.String("profile", "server", "Certificate profile: server, client, or peer.")
 	var intermediate = flag.Bool("intermediate", false, "Generate an intermediate CA certificate instead of a leaf certificate.")
 	var reuseKeys = flag.Bool("reuse-keys", false, "If only the key file exists, reuse it to generate the certificate")
+	var cn string
+	flag.StringVar(&cn, "cn", "", "Explicit Common Name for the certificate.\nIf omitted, the first value of --domains is used as CN (existing behaviour).\nUse this for device/client certs where the CN is not a DNS name.")
+	flag.StringVar(&cn, "common-name", "", "Alias for --cn")
 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
 	var org = flag.String("org", "", "Organization (O) to include in the certificate subject.")
@@ -69,7 +72,7 @@ Use the --intermediate flag to generate a Sub-CA certificate instead of a leaf.
 
 	flag.Parse()
 
-	if *domains == "" && *ipAddresses == "" {
+	if cn == "" && *domains == "" && *ipAddresses == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -160,6 +163,6 @@ Use the --intermediate flag to generate a Sub-CA certificate instead of a leaf.
 		return err
 	}
 
-	_, err = goselfca.Sign(issuer, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit, "")
+	_, err = goselfca.Sign(issuer, cn, domainSlice, ipSlice, alg, *reuseKeys, *profile, validity, *org, *unit, "")
 	return err
 }

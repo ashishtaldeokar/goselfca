@@ -284,17 +284,25 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
 }
 
 // Sign generates an end-entity (leaf) certificate signed by the Root CA's private key.
-func Sign(iss *Issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
-	var cn string
-	if len(domains) > 0 {
-		cn = domains[0]
-	} else if len(ipAddresses) > 0 {
-		cn = ipAddresses[0]
-	} else {
-		return nil, fmt.Errorf("must specify at least one domain name or IP address")
+func Sign(iss *Issuer, commonName string, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm, reuseKey bool, profile string, validity time.Duration, org, unit string, outDir string) (*x509.Certificate, error) {
+	cn := commonName
+	if cn == "" {
+		if len(domains) > 0 {
+			cn = domains[0]
+		} else if len(ipAddresses) > 0 {
+			cn = ipAddresses[0]
+		} else {
+			return nil, fmt.Errorf("either commonName or at least one domain name or IP address is required")
+		}
 	}
 	if outDir == "" {
-		outDir = strings.Replace(cn, "*", "_", -1)
+		if len(domains) > 0 {
+			outDir = strings.Replace(domains[0], "*", "_", -1)
+		} else if len(ipAddresses) > 0 {
+			outDir = strings.Replace(ipAddresses[0], "*", "_", -1)
+		} else {
+			outDir = strings.Replace(cn, "*", "_", -1)
+		}
 	}
 	err := os.MkdirAll(outDir, 0700)
 	if err != nil {

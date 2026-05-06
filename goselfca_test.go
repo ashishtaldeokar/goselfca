@@ -166,7 +166,7 @@ func TestSignProfiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cert, err := Sign(iss, []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity, "", "", filepath.Join(tempDir, tt.domain))
+			cert, err := Sign(iss, "", []string{tt.domain}, nil, x509.Ed25519, false, tt.profile, validity, "", "", filepath.Join(tempDir, tt.domain))
 			if err != nil {
 				t.Fatalf("sign() error = %v", err)
 			}
@@ -208,7 +208,7 @@ func TestSignOrgUnit(t *testing.T) {
 		t.Fatalf("Failed to retrieve issuer: %v", err)
 	}
 
-	cert, err := Sign(iss, []string{"test.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, org, unit, filepath.Join(tempDir, "test.local"))
+	cert, err := Sign(iss, "", []string{"test.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, org, unit, filepath.Join(tempDir, "test.local"))
 	if err != nil {
 		t.Fatalf("sign() error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestSignIntermediate(t *testing.T) {
 	}
 
 	leafDir := filepath.Join(tempDir, "leaf")
-	leafCert, err := Sign(subIss, []string{"leaf.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, "Leaf Org", "Leaf Unit", leafDir)
+	leafCert, err := Sign(subIss, "", []string{"leaf.local"}, nil, x509.Ed25519, false, "server", 1*time.Hour, "Leaf Org", "Leaf Unit", leafDir)
 	if err != nil {
 		t.Fatalf("Sign() from intermediate error = %v", err)
 	}
