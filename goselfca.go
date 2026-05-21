@@ -215,8 +215,7 @@ func MakeRootCert(key crypto.Signer, filename string, validity time.Duration, or
 
 		SubjectKeyId:          skid,
 		AuthorityKeyId:        skid,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLenZero:        true,

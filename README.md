@@ -15,6 +15,7 @@ Instead of writing complex OpenSSL bash scripts, `goselfca` automatically genera
 - **Subject Customization**: Easily inject Subject `Organization` (O) and `Organizational Unit` (OU) fields for clean logs and network debugging.
 - **High Entropy**: Uses 128-bit randomly generated serial numbers to prevent collision attacks.
 - **Idempotent by Default**: Reuses existing Root CA keys and certificates if they exist in the directory. 
+- **Standard-Compliant Root CA**: Root CAs are generated strictly as Certificate Authorities (`basicConstraints=CA:TRUE, pathlen:0`) with appropriate Key Usages (`keyCertSign, cRLSign`) and no conflicting Extended Key Usages (EKU).
 
 > **Note**: `goselfca` acts as a developer-friendly Root CA. It does not offer OCSP or CRL services.
 
@@ -23,8 +24,10 @@ Instead of writing complex OpenSSL bash scripts, `goselfca` automatically genera
 Ensure you have Go installed, then run:
 
 ```bash
-go install github.com/ashishtaldeokar/goselfca@latest
+go install github.com/ashishtaldeokar/goselfca/cmd/goselfca@latest
 ```
+
+> **Note**: If you receive a `command not found` error after installing, ensure that your Go binaries directory is added to your system's `$PATH`. You can typically do this by running `export PATH="$PATH:$(go env GOPATH)/bin"`.
 
 ## Quick Start
 
